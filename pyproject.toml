@@ -1,0 +1,23 @@
+[project]
+name = "face2art"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "gdown>=5.2.0",
+    "huggingface-hub>=0.34.0",
+    "onnx>=1.17.0",
+    "onnx2torch>=1.5.15",
+    "pillow>=12.3.0",
+    "pyyaml>=6.0",
+    "requests>=2.32.0",
+    "torch>=2.13.0",
+    "torchvision>=0.28.0",
+]
+
+[dependency-groups]
+dev = [
+    "onnxruntime>=1.22.0",
+    "pytest>=8.4.0",
+]

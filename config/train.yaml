@@ -1,0 +1,93 @@
+# FFHQ (domain A) -> SNGFaces (domain B), following the EnCo objective.
+experiment:
+  name: ffhq_to_sngfaces_enco
+  seed: 42
+  output_dir: outputs
+
+data:
+  datasets_config: config/datasets.yaml
+  source: ffhq
+  target: sngfaces
+  extensions: [png, jpg, jpeg, webp]
+  recursive: false
+  load_size: 286
+  crop_size: 256
+  random_crop: true
+  horizontal_flip: true
+  # One epoch visits every painting once and randomly samples FFHQ faces.
+  epoch_size: target          # target, source, max, min, or an integer
+  batch_size: 1
+  num_workers: 4
+  pin_memory: true
+  persistent_workers: true
+  drop_last: true
+
+model:
+  name: enco
+  generator: resnet_9blocks
+  discriminator: patchgan
+  input_channels: 3
+  output_channels: 3
+  generator_channels: 64
+  discriminator_channels: 64
+  discriminator_layers: 3
+  normalization: instance
+  use_dropout: false
+  initialization: normal
+  initialization_gain: 0.02
+  feature_pairs:
+    - [enc_shallow, dec_shallow]
+    - [enc_mid, dec_mid]
+    - [bottleneck_early, bottleneck_late]
+  projection_dim: 256
+  predictor_hidden_dim: 128
+  num_patches: 256
+  dag_oversample_ratio: 4
+  dag_random_ratio: 0.5
+  stop_gradient: true
+
+losses:
+  gan_mode: lsgan
+  gan_weight: 1.0
+  enco_weight: 2.0
+  target_identity_weight: 10.0
+  target_identity_until_epoch: 100
+  arcface_weight: 1.0
+
+arcface:
+  provider: auraface_v1
+  assets_config: config/assets.yaml
+  asset: auraface
+  auto_download: true
+  input_size: 112
+
+optimizer:
+  name: adam
+  generator_lr: 0.00005
+  feature_lr: 0.00005
+  discriminator_lr: 0.0002
+  beta1: 0.5
+  beta2: 0.999
+  weight_decay: 0.0
+
+scheduler:
+  name: warmup_linear_decay
+  # Warmup occupies the first 20 epochs of the 100-epoch constant phase.
+  warmup_epochs: 20
+  constant_epochs: 100
+  decay_epochs: 100
+
+training:
+  device: auto               # auto, cuda, cpu, or mps
+  epochs: 200
+  mixed_precision: true
+  gradient_clip_norm: null
+  resume: null
+
+checkpointing:
+  save_every_epochs: 10
+  keep_latest: true
+
+logging:
+  log_every_steps: 25
+  sample_every_steps: 250

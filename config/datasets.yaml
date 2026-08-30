@@ -1,0 +1,22 @@
+# Paths are relative to the repository root unless absolute.
+datasets:
+  sngfaces:
+    type: google_drive_folder
+    path: data/SNGFaces
+    url: https://drive.google.com/drive/folders/1_Ddr__nik0hov_1RObmkeeylZYLDa7Vx
+    format: png
+    expected_count: 644
+
+  ffhq:
+    type: ffhq
+    path: data/FFHQ
+    # NVIDIA FFHQ v2 metadata (70,000 aligned 1024x1024 images).
+    metadata_url: https://drive.google.com/uc?id=16N0RV4fHI6joBuKbQAoG34V_cQk7vxSA
+    metadata_cache: data/.cache/ffhq-dataset-v2.json
+    metadata_md5: 425ae20f06a4da1d4dc0f46d40ba5fd6
+    subset:
+      start: 0
+      count: 10000
+    format: png
+    image_size: 1024
+    expected_count: 10000

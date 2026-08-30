@@ -1,0 +1,11 @@
+# External model artifacts. Paths are relative to the repository root.
+assets:
+  auraface:
+    type: huggingface
+    repo_id: fal/AuraFace-v1
+    revision: af6d057c9b0ec4071d4c49c80e3539258798b609
+    filename: glintr100.onnx
+    path: data/.cache/models/auraface/glintr100.onnx
+    sha256: a7933ea5330113b01c9b60351d8f4c33003f145d8470ac5f0e52ee2effe25c60
+    license: Apache-2.0
+    license_url: https://huggingface.co/fal/AuraFace-v1/blob/main/LICENSE.md

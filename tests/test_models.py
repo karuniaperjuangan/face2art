@@ -7,7 +7,7 @@ import torch
 
 from src.config import load_training_config
 from src.models import build_enco_model
-from src.trainer import Trainer
+from src.trainer import EarlyStopping, Trainer, kernel_inception_distance
 
 
 def tiny_config() -> dict:
@@ -71,3 +71,15 @@ def test_trainer_checkpoint_round_trip(tmp_path: Path) -> None:
     second = next(restored.model.generator.parameters()).detach()
     assert torch.equal(first, second)
 
+
+def test_early_stopping_uses_kid_with_arcface_guardrail() -> None:
+    stopping = EarlyStopping(patience=2, min_delta=0.01, max_arcface=0.5)
+    assert not stopping.step(kid=0.2, arcface=0.4)
+    assert stopping.improved
+    assert not stopping.step(kid=0.1, arcface=0.6)
+    assert stopping.step(kid=0.195, arcface=0.4)
+
+
+def test_kernel_inception_distance_detects_a_shift() -> None:
+    real = torch.randn(16, 8)
+    assert kernel_inception_distance(real, real + 5) > kernel_inception_distance(real, real)

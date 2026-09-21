@@ -32,33 +32,35 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def build_loader(config: dict, device: torch.device) -> DataLoader:
+def build_loader(config: dict, device: torch.device, *, training: bool = True) -> DataLoader:
     data = config["data"]
+    early = config.get("early_stopping", {})
     source_root, target_root = dataset_paths(config)
     transform = make_train_transform(
         int(data["load_size"]),
         int(data["crop_size"]),
-        bool(data["random_crop"]),
-        bool(data["horizontal_flip"]),
+        bool(data["random_crop"]) if training else False,
+        bool(data["horizontal_flip"]) if training else False,
     )
     dataset = UnpairedImageDataset(
         source_root,
         target_root,
         data["extensions"],
         transform,
-        epoch_size=data["epoch_size"],
+        epoch_size=data["epoch_size"] if training else int(early["samples"]),
         recursive=bool(data["recursive"]),
+        random_source=training,
     )
     workers = int(data["num_workers"])
     generator = torch.Generator().manual_seed(int(config["experiment"]["seed"]))
     return DataLoader(
         dataset,
-        batch_size=int(data["batch_size"]),
-        shuffle=True,
+        batch_size=int(data["batch_size"] if training else early.get("batch_size", 8)),
+        shuffle=training,
         num_workers=workers,
         pin_memory=bool(data["pin_memory"]) and device.type == "cuda",
         persistent_workers=bool(data["persistent_workers"]) and workers > 0,
-        drop_last=bool(data["drop_last"]),
+        drop_last=bool(data["drop_last"]) if training else False,
         worker_init_fn=seed_worker,
         generator=generator,
     )
@@ -94,6 +96,11 @@ def main() -> None:
     identity = load_identity_loss(config)
     model = build_enco_model(config, identity_loss=identity)
     loader = build_loader(config, device)
+    evaluation_loader = (
+        build_loader(config, device, training=False)
+        if bool(config.get("early_stopping", {}).get("enabled", False))
+        else None
+    )
     output_dir = resolve_path(config["experiment"]["output_dir"]) / config["experiment"]["name"]
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "resolved_config.yaml").write_text(
@@ -103,10 +110,9 @@ def main() -> None:
     resume = args.resume or config["training"].get("resume")
     if resume:
         trainer.resume(resolve_path(resume))
-    checkpoint = trainer.fit(loader, max_steps=args.max_steps)
+    checkpoint = trainer.fit(loader, max_steps=args.max_steps, evaluation_loader=evaluation_loader)
     print(f"Saved checkpoint: {checkpoint}")
 
 
 if __name__ == "__main__":
     main()
-

@@ -53,6 +53,9 @@ SNGFaces paintings once and samples FFHQ faces randomly.
 uv run python -m src.train --config config/train.yaml
 ```
 
+For Colab training with checkpoints stored in Google Drive, open
+[notebooks/colab.ipynb](notebooks/colab.ipynb).
+
 For an end-to-end smoke test:
 
 ```bash
@@ -64,7 +67,11 @@ Outputs are stored under `outputs/ffhq_to_sngfaces_enco/`:
 - `checkpoints/latest.pt` contains G, D, the EnCo feature heads, optimizers,
   schedulers, AMP state, step, epoch, and resolved config.
 - `metrics.csv` records each loss.
+- `early_stopping.csv` records KID and ArcFace distance every five epochs from epoch 100.
 - `samples/` contains rows of source, generated, and real target images.
+
+Early stopping saves the lowest-KID checkpoint that remains below the configured
+ArcFace identity-distance ceiling as `checkpoints/best.pt`.
 
 Resume with `--resume path/to/latest.pt`, or set `training.resume` in YAML.
 
@@ -76,6 +83,14 @@ uv run python -m src.infer \
   --checkpoint outputs/ffhq_to_sngfaces_enco/checkpoints/latest.pt \
   --input data/FFHQ/00000.png \
   --output outputs/example.png
+```
+
+Launch the upload-and-translate Gradio UI with:
+
+```bash
+uv run python -m src.ui \
+  --config config/train.yaml \
+  --checkpoint outputs/ffhq_to_sngfaces_enco/checkpoints/best.pt
 ```
 
 The input may also be a flat directory, in which case the output must be a

@@ -84,6 +84,16 @@ training:
   gradient_clip_norm: null
   resume: null
 
+early_stopping:
+  enabled: true
+  start_epoch: 100
+  check_every_epochs: 5
+  patience: 5
+  min_delta: 0.001
+  max_arcface: 0.5
+  samples: 644
+  batch_size: 8
+
 checkpointing:
   save_every_epochs: 10
   keep_latest: true

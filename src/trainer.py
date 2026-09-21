@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,7 @@ from torch.nn.utils import clip_grad_norm_
 from torch.optim import Adam
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
+from torchvision.models import Inception_V3_Weights, inception_v3
 from torchvision.utils import save_image
 
 from .models.enco import EnCoModel
@@ -28,6 +30,45 @@ LOSS_COLUMNS = (
     "target_identity",
     "arcface",
 )
+
+
+@dataclass
+class EarlyStopping:
+    patience: int
+    min_delta: float = 0.0
+    max_arcface: float = float("inf")
+    best_kid: float = float("inf")
+    bad_checks: int = 0
+    improved: bool = False
+
+    def __post_init__(self) -> None:
+        if self.patience <= 0:
+            raise ValueError("early stopping patience must be positive")
+
+    def step(self, kid: float, arcface: float) -> bool:
+        self.improved = arcface <= self.max_arcface and kid < self.best_kid - self.min_delta
+        if self.improved:
+            self.best_kid = kid
+            self.bad_checks = 0
+        else:
+            self.bad_checks += 1
+        return self.bad_checks >= self.patience
+
+
+def kernel_inception_distance(real: Tensor, fake: Tensor) -> float:
+    """Unbiased polynomial-kernel MMD over Inception features."""
+    if real.ndim != 2 or fake.ndim != 2 or min(len(real), len(fake)) < 2:
+        raise ValueError("KID requires two 2D feature batches with at least two samples each")
+    if real.shape[1] != fake.shape[1]:
+        raise ValueError("real and fake KID features must have the same width")
+    real, fake = real.double(), fake.double()
+    scale = real.shape[1]
+    rr = (real @ real.T / scale + 1.0).pow(3)
+    ff = (fake @ fake.T / scale + 1.0).pow(3)
+    rf = (real @ fake.T / scale + 1.0).pow(3)
+    real_term = (rr.sum() - rr.diagonal().sum()) / (len(real) * (len(real) - 1))
+    fake_term = (ff.sum() - ff.diagonal().sum()) / (len(fake) * (len(fake) - 1))
+    return float(real_term + fake_term - 2.0 * rf.mean())
 
 
 def _set_requires_grad(module: torch.nn.Module, value: bool) -> None:
@@ -62,6 +103,7 @@ class Trainer:
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         self.sample_dir.mkdir(parents=True, exist_ok=True)
         self.log_path = output_dir / "metrics.csv"
+        self.early_stopping_log_path = output_dir / "early_stopping.csv"
 
         optimizer = config["optimizer"]
         kwargs = {
@@ -91,6 +133,18 @@ class Trainer:
         self.scaler = torch.amp.GradScaler("cuda", enabled=self.amp)
         self.start_epoch = 1
         self.global_step = 0
+        early = config.get("early_stopping", {})
+        self.early_stopping = (
+            EarlyStopping(
+                patience=int(early["patience"]),
+                min_delta=float(early.get("min_delta", 0.0)),
+                max_arcface=float(early.get("max_arcface", float("inf"))),
+            )
+            if bool(early.get("enabled", False))
+            else None
+        )
+        self._inception: torch.nn.Module | None = None
+        self._real_kid_features: Tensor | None = None
 
     def _autocast(self):
         return torch.autocast(device_type=self.device.type, dtype=torch.float16, enabled=self.amp)
@@ -157,6 +211,51 @@ class Trainer:
             value_range=(-1, 1),
         )
 
+    def _inception_features(self, images: Tensor) -> Tensor:
+        if self._inception is None:
+            weights = Inception_V3_Weights.DEFAULT
+            self._inception = inception_v3(weights=weights)
+            self._inception.fc = torch.nn.Identity()
+            self._inception.eval().to(self.device)
+        inputs = Inception_V3_Weights.DEFAULT.transforms()(
+            images.float().add(1.0).div(2.0).clamp(0.0, 1.0)
+        )
+        return self._inception(inputs).flatten(1)
+
+    @torch.inference_mode()
+    def evaluate_early_stopping(self, loader: DataLoader) -> tuple[float, float]:
+        if self.model.identity_loss is None:
+            raise RuntimeError("ArcFace early stopping requires losses.arcface_weight > 0")
+        self.model.generator.eval()
+        self.model.identity_loss.eval()
+        real_features: list[Tensor] = []
+        fake_features: list[Tensor] = []
+        identity_total = 0.0
+        samples = 0
+        for batch in loader:
+            source = batch["source"].to(self.device, non_blocking=True)
+            target = batch["target"].to(self.device, non_blocking=True)
+            fake = self.model.generator(source)
+            if self._real_kid_features is None:
+                real_features.append(self._inception_features(target).cpu())
+            fake_features.append(self._inception_features(fake).cpu())
+            identity_total += float(self.model.identity_loss(source, fake)) * len(source)
+            samples += len(source)
+        if samples < 2:
+            raise ValueError("early stopping evaluation requires at least two samples")
+        if self._real_kid_features is None:
+            self._real_kid_features = torch.cat(real_features)
+        kid = kernel_inception_distance(self._real_kid_features, torch.cat(fake_features))
+        return kid, identity_total / samples
+
+    def _append_early_stopping_log(self, epoch: int, kid: float, arcface: float) -> None:
+        new_file = not self.early_stopping_log_path.exists()
+        with self.early_stopping_log_path.open("a", newline="", encoding="utf-8") as stream:
+            writer = csv.writer(stream)
+            if new_file:
+                writer.writerow(("epoch", "kid", "arcface"))
+            writer.writerow((epoch, kid, arcface))
+
     def checkpoint(self, epoch: int, name: str = "latest.pt") -> Path:
         path = self.checkpoint_dir / name
         torch.save(
@@ -174,6 +273,14 @@ class Trainer:
                 "scheduler_f": self.scheduler_f.state_dict(),
                 "scheduler_d": self.scheduler_d.state_dict(),
                 "scaler": self.scaler.state_dict(),
+                "early_stopping": (
+                    {
+                        "best_kid": self.early_stopping.best_kid,
+                        "bad_checks": self.early_stopping.bad_checks,
+                    }
+                    if self.early_stopping is not None
+                    else None
+                ),
             },
             path,
         )
@@ -193,8 +300,17 @@ class Trainer:
         self.scaler.load_state_dict(checkpoint.get("scaler", {}))
         self.start_epoch = int(checkpoint["epoch"]) + 1
         self.global_step = int(checkpoint["global_step"])
+        early = checkpoint.get("early_stopping")
+        if early and self.early_stopping is not None:
+            self.early_stopping.best_kid = float(early["best_kid"])
+            self.early_stopping.bad_checks = int(early["bad_checks"])
 
-    def fit(self, loader: DataLoader, max_steps: int | None = None) -> Path:
+    def fit(
+        self,
+        loader: DataLoader,
+        max_steps: int | None = None,
+        evaluation_loader: DataLoader | None = None,
+    ) -> Path:
         training = self.config["training"]
         logging = self.config["logging"]
         checkpointing = self.config["checkpointing"]
@@ -220,6 +336,28 @@ class Trainer:
             self.scheduler_g.step()
             self.scheduler_f.step()
             self.scheduler_d.step()
+            early = self.config.get("early_stopping", {})
+            should_check = (
+                self.early_stopping is not None
+                and epoch >= int(early.get("start_epoch", 1))
+                and epoch % int(early.get("check_every_epochs", 1)) == 0
+            )
+            if should_check:
+                if evaluation_loader is None:
+                    raise ValueError("early stopping requires an evaluation loader")
+                kid, arcface = self.evaluate_early_stopping(evaluation_loader)
+                self._append_early_stopping_log(epoch, kid, arcface)
+                stop = self.early_stopping.step(kid, arcface)
+                print(
+                    f"epoch={epoch} validation kid={kid:.6f} arcface={arcface:.6f} "
+                    f"patience={self.early_stopping.bad_checks}/{self.early_stopping.patience}",
+                    flush=True,
+                )
+                if self.early_stopping.improved:
+                    self.checkpoint(epoch, "best.pt")
+                if stop:
+                    print(f"Early stopping at epoch {epoch}", flush=True)
+                    return self.checkpoint(epoch)
             if epoch % int(checkpointing["save_every_epochs"]) == 0:
                 self.checkpoint(epoch, f"epoch_{epoch:04d}.pt")
             if bool(checkpointing["keep_latest"]):

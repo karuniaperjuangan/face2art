@@ -7,6 +7,7 @@ from pathlib import Path
 
 import torch
 from PIL import Image
+from torch import nn
 from torchvision import transforms
 from torchvision.transforms import InterpolationMode
 from torchvision.transforms.functional import to_pil_image
@@ -14,6 +15,31 @@ from torchvision.transforms.functional import to_pil_image
 from .config import PROJECT_ROOT, choose_device, load_training_config, resolve_path
 from .data import discover_images
 from .models import build_generator
+
+
+def load_generator(config: dict, checkpoint_path: Path, device: torch.device) -> nn.Module:
+    generator = build_generator(config["model"]).to(device)
+    checkpoint = torch.load(
+        resolve_path(checkpoint_path), map_location=device, weights_only=False
+    )
+    generator.load_state_dict(checkpoint["generator"])
+    return generator.eval()
+
+
+@torch.inference_mode()
+def translate_image(
+    image: Image.Image, generator: nn.Module, size: int, device: torch.device
+) -> Image.Image:
+    transform = transforms.Compose(
+        [
+            transforms.Resize((size, size), InterpolationMode.BICUBIC, antialias=True),
+            transforms.ToTensor(),
+            transforms.Normalize((0.5,) * 3, (0.5,) * 3),
+        ]
+    )
+    inputs = transform(image.convert("RGB")).unsqueeze(0).to(device)
+    translated = generator(inputs)[0].detach().cpu().add(1).div(2).clamp(0, 1)
+    return to_pil_image(translated)
 
 
 def parse_args() -> argparse.Namespace:
@@ -29,10 +55,7 @@ def main() -> None:
     args = parse_args()
     config = load_training_config(args.config)
     device = choose_device(str(config["training"]["device"]))
-    generator = build_generator(config["model"]).to(device)
-    checkpoint = torch.load(resolve_path(args.checkpoint), map_location=device, weights_only=False)
-    generator.load_state_dict(checkpoint["generator"])
-    generator.eval()
+    generator = load_generator(config, args.checkpoint, device)
 
     input_path = resolve_path(args.input)
     if input_path.is_dir():
@@ -53,22 +76,12 @@ def main() -> None:
         destinations = [output_path]
 
     size = int(config["data"]["crop_size"])
-    transform = transforms.Compose(
-        [
-            transforms.Resize((size, size), InterpolationMode.BICUBIC, antialias=True),
-            transforms.ToTensor(),
-            transforms.Normalize((0.5,) * 3, (0.5,) * 3),
-        ]
-    )
-    with torch.inference_mode():
-        for source, destination in zip(inputs, destinations, strict=True):
-            with Image.open(source) as image:
-                inputs_tensor = transform(image.convert("RGB")).unsqueeze(0).to(device)
-            translated = generator(inputs_tensor)[0].detach().cpu().add(1).div(2).clamp(0, 1)
-            to_pil_image(translated).save(destination)
-            print(destination)
+    for source, destination in zip(inputs, destinations, strict=True):
+        with Image.open(source) as image:
+            translated = translate_image(image, generator, size, device)
+        translated.save(destination)
+        print(destination)
 
 
 if __name__ == "__main__":
     main()
-

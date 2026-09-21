@@ -59,10 +59,12 @@ class UnpairedImageDataset(Dataset[dict[str, Tensor | str]]):
         transform: transforms.Compose,
         epoch_size: str | int = "target",
         recursive: bool = False,
+        random_source: bool = True,
     ) -> None:
         self.source_paths = discover_images(source_root, extensions, recursive)
         self.target_paths = discover_images(target_root, extensions, recursive)
         self.transform = transform
+        self.random_source = random_source
         self.length = self._resolve_length(epoch_size)
 
     def _resolve_length(self, epoch_size: str | int) -> int:
@@ -88,7 +90,8 @@ class UnpairedImageDataset(Dataset[dict[str, Tensor | str]]):
 
     def __getitem__(self, index: int) -> dict[str, Tensor | str]:
         target_path = self.target_paths[index % len(self.target_paths)]
-        source_path = self.source_paths[random.randrange(len(self.source_paths))]
+        source_index = random.randrange(len(self.source_paths)) if self.random_source else index
+        source_path = self.source_paths[source_index % len(self.source_paths)]
         source = self.transform(self._open(source_path))
         target = self.transform(self._open(target_path))
         return {

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import csv
+import sys
 from copy import deepcopy
 from pathlib import Path
+from types import SimpleNamespace
 
 import torch
 
@@ -59,6 +62,8 @@ def test_trainer_checkpoint_round_trip(tmp_path: Path) -> None:
     trainer = Trainer(build_enco_model(config), config, torch.device("cpu"), tmp_path / "run")
     losses, fake = trainer.train_step(torch.randn(1, 3, 32, 32), torch.randn(1, 3, 32, 32), 1)
     trainer.global_step = 1
+    trainer._append_log(1, losses)
+    trainer._append_log(1, {"kid": 0.1, "arcface": 0.2})
     checkpoint = trainer.checkpoint(1)
     assert fake.shape == (1, 3, 32, 32)
     assert all(torch.isfinite(torch.tensor(value)) for value in losses.values())
@@ -70,6 +75,10 @@ def test_trainer_checkpoint_round_trip(tmp_path: Path) -> None:
     first = next(trainer.model.generator.parameters()).detach()
     second = next(restored.model.generator.parameters()).detach()
     assert torch.equal(first, second)
+    with trainer.log_path.open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream))
+    assert rows[0]["kid"] == ""
+    assert rows[1]["kid"] == "0.1"
 
 
 def test_early_stopping_uses_kid_with_arcface_guardrail() -> None:
@@ -83,3 +92,33 @@ def test_early_stopping_uses_kid_with_arcface_guardrail() -> None:
 def test_kernel_inception_distance_detects_a_shift() -> None:
     real = torch.randn(16, 8)
     assert kernel_inception_distance(real, real + 5) > kernel_inception_distance(real, real)
+
+
+def test_optional_wandb_logging(monkeypatch, tmp_path: Path) -> None:
+    logged: list[dict] = []
+    finished = False
+
+    class Run:
+        def log(self, metrics: dict) -> None:
+            logged.append(metrics)
+
+        def finish(self) -> None:
+            nonlocal finished
+            finished = True
+
+    initialized: dict = {}
+
+    def init(**kwargs):
+        initialized.update(kwargs)
+        return Run()
+
+    monkeypatch.setitem(sys.modules, "wandb", SimpleNamespace(init=init))
+    config = tiny_config()
+    config["wandb"]["enabled"] = True
+    trainer = Trainer(build_enco_model(config), config, torch.device("cpu"), tmp_path)
+    trainer._log_wandb("validation", 2, {"kid": 0.1})
+    trainer.close()
+
+    assert initialized["config"] is config
+    assert logged == [{"epoch": 2, "global_step": 0, "validation/kid": 0.1}]
+    assert finished

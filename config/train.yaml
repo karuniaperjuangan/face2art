@@ -101,3 +101,9 @@ checkpointing:
 logging:
   log_every_steps: 25
   sample_every_steps: 250
+
+wandb:
+  enabled: false
+  project: face2art
+  entity: null
+  name: null

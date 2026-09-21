@@ -66,12 +66,17 @@ Outputs are stored under `outputs/ffhq_to_sngfaces_enco/`:
 
 - `checkpoints/latest.pt` contains G, D, the EnCo feature heads, optimizers,
   schedulers, AMP state, step, epoch, and resolved config.
-- `metrics.csv` records each loss.
+- `metrics.csv` records training losses plus epoch-level KID evaluation rows.
 - `early_stopping.csv` records KID and ArcFace distance every five epochs from epoch 100.
 - `samples/` contains rows of source, generated, and real target images.
 
 Early stopping saves the lowest-KID checkpoint that remains below the configured
 ArcFace identity-distance ceiling as `checkpoints/best.pt`.
+
+Set `wandb.enabled: true` to log the resolved hyperparameters, training losses,
+KID, and validation ArcFace distance to Weights & Biases. Authentication uses
+the standard `WANDB_API_KEY` environment variable; the Colab notebook exposes it
+as an optional form field.
 
 Resume with `--resume path/to/latest.pt`, or set `training.resume` in YAML.
 

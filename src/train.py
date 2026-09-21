@@ -107,10 +107,15 @@ def main() -> None:
         yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
     )
     trainer = Trainer(model, config, device, output_dir)
-    resume = args.resume or config["training"].get("resume")
-    if resume:
-        trainer.resume(resolve_path(resume))
-    checkpoint = trainer.fit(loader, max_steps=args.max_steps, evaluation_loader=evaluation_loader)
+    try:
+        resume = args.resume or config["training"].get("resume")
+        if resume:
+            trainer.resume(resolve_path(resume))
+        checkpoint = trainer.fit(
+            loader, max_steps=args.max_steps, evaluation_loader=evaluation_loader
+        )
+    finally:
+        trainer.close()
     print(f"Saved checkpoint: {checkpoint}")
 
 

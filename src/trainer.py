@@ -29,6 +29,7 @@ LOSS_COLUMNS = (
     "enco",
     "target_identity",
     "arcface",
+    "kid",
 )
 
 
@@ -145,6 +146,20 @@ class Trainer:
         )
         self._inception: torch.nn.Module | None = None
         self._real_kid_features: Tensor | None = None
+        tracking = config.get("wandb", {})
+        self.wandb_run: Any | None = None
+        if bool(tracking.get("enabled", False)):
+            try:
+                import wandb
+            except ImportError as exc:
+                raise RuntimeError("W&B logging requires the wandb package") from exc
+            self.wandb_run = wandb.init(
+                project=str(tracking.get("project", "face2art")),
+                entity=tracking.get("entity") or None,
+                name=tracking.get("name") or str(config["experiment"]["name"]),
+                config=config,
+                dir=str(output_dir),
+            )
 
     def _autocast(self):
         return torch.autocast(device_type=self.device.type, dtype=torch.float16, enabled=self.amp)
@@ -197,6 +212,20 @@ class Trainer:
             if new_file:
                 writer.writeheader()
             writer.writerow({"epoch": epoch, "step": self.global_step, **losses})
+
+    def _log_wandb(self, prefix: str, epoch: int, metrics: dict[str, float]) -> None:
+        if self.wandb_run is not None:
+            self.wandb_run.log(
+                {
+                    "epoch": epoch,
+                    "global_step": self.global_step,
+                    **{f"{prefix}/{key}": value for key, value in metrics.items()},
+                }
+            )
+
+    def close(self) -> None:
+        if self.wandb_run is not None:
+            self.wandb_run.finish()
 
     def _save_samples(self, source: Tensor, fake: Tensor, target: Tensor) -> None:
         batch = source.shape[0]
@@ -326,8 +355,11 @@ class Trainer:
                 self._append_log(epoch, losses)
                 if self.global_step % int(logging["log_every_steps"]) == 0 or steps_this_run == 1:
                     elapsed = time.monotonic() - started
-                    short = " ".join(f"{key}={losses[key]:.4f}" for key in LOSS_COLUMNS)
+                    short = " ".join(
+                        f"{key}={losses[key]:.4f}" for key in LOSS_COLUMNS if key in losses
+                    )
                     print(f"epoch={epoch} step={self.global_step} time={elapsed:.1f}s {short}", flush=True)
+                    self._log_wandb("train", epoch, losses)
                 if self.global_step % int(logging["sample_every_steps"]) == 0 or steps_this_run == 1:
                     self._save_samples(batch["source"], fake, batch["target"])
                 if max_steps is not None and steps_this_run >= max_steps:
@@ -347,6 +379,8 @@ class Trainer:
                     raise ValueError("early stopping requires an evaluation loader")
                 kid, arcface = self.evaluate_early_stopping(evaluation_loader)
                 self._append_early_stopping_log(epoch, kid, arcface)
+                self._append_log(epoch, {"kid": kid, "arcface": arcface})
+                self._log_wandb("validation", epoch, {"kid": kid, "arcface": arcface})
                 stop = self.early_stopping.step(kid, arcface)
                 print(
                     f"epoch={epoch} validation kid={kid:.6f} arcface={arcface:.6f} "

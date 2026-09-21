@@ -19,8 +19,6 @@ import hashlib
 import json
 import os
 import re
-import subprocess
-import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
@@ -127,22 +125,18 @@ def download_ffhq(spec: dict[str, Any], workers: int, limit: int | None, start: 
 def download_google_drive_folder(spec: dict[str, Any], limit: int | None = None) -> None:
     output = resolve_path(str(spec["path"]))
     output.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        import gdown  # type: ignore
+    except ImportError as exc:  # pragma: no cover - exercised in a clean install
+        raise SystemExit("The Google Drive dataset requires gdown (pip install gdown)") from exc
     if limit is not None:
-        try:
-            import gdown  # type: ignore
-        except ImportError as exc:  # pragma: no cover - exercised in a clean install
-            raise SystemExit("The Google Drive dataset requires gdown (pip install gdown)") from exc
         items = gdown.download_folder(url=str(spec["url"]), output=str(output), quiet=False, skip_download=True)
         for item in items[: max(0, limit)]:
             target = Path(item.local_path)
             target.parent.mkdir(parents=True, exist_ok=True)
             gdown.download(id=item.id, output=str(target), quiet=False)
         return
-    command = [sys.executable, "-m", "gdown", "--folder", str(spec["url"]), "-O", str(output)]
-    try:
-        subprocess.run(command, check=True)
-    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
-        raise SystemExit("The Google Drive dataset requires gdown (pip install gdown)") from exc
+    gdown.download_folder(url=str(spec["url"]), output=str(output), quiet=False)
 
 
 def download_dataset(name: str, spec: dict[str, Any], args: argparse.Namespace) -> None:

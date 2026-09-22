@@ -1,6 +1,6 @@
 # FFHQ (domain A) -> SNGFaces (domain B), following the EnCo objective.
 experiment:
-  name: ffhq_to_sngfaces_enco
+  name: ffhq_to_sngfaces_enco_v2
   seed: 42
   output_dir: outputs
 
@@ -52,7 +52,7 @@ losses:
   enco_weight: 2.0
   target_identity_weight: 10.0
   target_identity_until_epoch: 100
-  arcface_weight: 1.0
+  arcface_weight: 2.0
 
 arcface:
   provider: auraface_v1
@@ -90,7 +90,7 @@ early_stopping:
   check_every_epochs: 5
   patience: 5
   min_delta: 0.001
-  max_arcface: 0.5
+  max_arcface: 0.3
   samples: 644
   batch_size: 8
 

@@ -12,3 +12,4 @@ wheels/
 data/
 outputs/
 .pytest_cache/
+.env
